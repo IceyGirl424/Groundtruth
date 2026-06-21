@@ -9,6 +9,9 @@ __pycache__/
 # Runtime logs
 logs/
 
+# Dashboard runtime feed (written by the coordinator)
+fleet_state.json
+
 # uAgents local runtime state (per-agent storage; machine-local)
 *.agent
 *_data.json

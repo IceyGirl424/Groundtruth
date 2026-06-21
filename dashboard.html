@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Groundtruth — Fleet Dashboard</title>
+<style>
+  :root {
+    --bg: #0b0f14;
+    --card: #131922;
+    --border: #232b36;
+    --text: #e6edf3;
+    --muted: #8b98a5;
+    --green: #3fb950;
+    --yellow: #d29922;
+    --red: #f85149;
+    --accent: #58a6ff;
+  }
+  * { box-sizing: border-box; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    margin: 0;
+    padding: 32px;
+  }
+  h1 {
+    font-size: 22px;
+    margin: 0 0 4px 0;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .subtitle { color: var(--muted); font-size: 14px; margin-bottom: 24px; }
+  .live-dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: var(--green);
+    box-shadow: 0 0 8px var(--green);
+    animation: pulse 1.6s infinite;
+  }
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.3; }
+  }
+  .banner {
+    background: linear-gradient(90deg, #1f6feb22, #1f6feb11);
+    border: 1px solid var(--accent);
+    border-radius: 8px;
+    padding: 12px 16px;
+    margin-bottom: 24px;
+    font-size: 14px;
+    display: none;
+  }
+  .banner.show { display: block; }
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    gap: 16px;
+  }
+  .card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 18px;
+    transition: border-color 0.3s, box-shadow 0.3s;
+  }
+  .card.critical {
+    border-color: var(--red);
+    box-shadow: 0 0 0 1px var(--red), 0 0 16px #f8514933;
+    animation: redpulse 1.4s infinite;
+  }
+  @keyframes redpulse {
+    0%, 100% { box-shadow: 0 0 0 1px var(--red), 0 0 16px #f8514933; }
+    50% { box-shadow: 0 0 0 1px var(--red), 0 0 28px #f8514966; }
+  }
+  .card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 14px;
+  }
+  .drone-name { font-weight: 600; font-size: 16px; }
+  .status-pill {
+    font-size: 11px;
+    padding: 3px 8px;
+    border-radius: 999px;
+    background: #1a2230;
+    color: var(--muted);
+  }
+  .status-pill.ok { color: var(--green); }
+  .status-pill.warn { color: var(--yellow); }
+  .status-pill.crit { color: var(--red); }
+  .battery-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 12px;
+  }
+  .battery-bar-bg {
+    flex: 1;
+    height: 10px;
+    background: #1a2230;
+    border-radius: 6px;
+    overflow: hidden;
+  }
+  .battery-bar-fill {
+    height: 100%;
+    border-radius: 6px;
+    transition: width 0.6s ease, background 0.6s ease;
+  }
+  .battery-pct { font-size: 13px; font-weight: 600; min-width: 38px; text-align: right; }
+  .field { font-size: 13px; color: var(--muted); margin-top: 6px; }
+  .field b { color: var(--text); font-weight: 500; }
+  .footer {
+    margin-top: 28px;
+    color: var(--muted);
+    font-size: 12px;
+  }
+</style>
+</head>
+<body>
+
+  <h1><span class="live-dot"></span> Groundtruth — Live Fleet</h1>
+  <div class="subtitle">Autonomous coordination for commercial drone inspection fleets</div>
+
+  <div class="banner" id="planBanner"></div>
+
+  <div class="grid" id="fleetGrid"></div>
+
+  <div class="footer" id="lastUpdated">Waiting for fleet data…</div>
+
+<script>
+/*
+  Groundtruth Fleet Dashboard — standalone, no build step.
+
+  DATA SOURCE: polls a local JSON file `fleet_state.json` every 2 seconds.
+  This keeps the dashboard fully decoupled from the agent stack — you don't
+  need to wire a live server connection for the hackathon demo, just have
+  something (a small script, or coordinator_agent.py itself) write the
+  current fleet state to that file after each query.
+
+  Expected shape of fleet_state.json:
+  {
+    "drones": [
+      {
+        "drone_id": "Drone-1",
+        "battery_pct": 86,
+        "position": "Grid-A1",
+        "current_task": "Panel A1",
+        "remaining_tasks": ["Panel A2", "Panel A3"],
+        "can_accept_more": true
+      },
+      ...
+    ],
+    "last_plan": {
+      "reassignments": [
+        {"task": "Panel B2", "from_drone": "Drone-2", "to_drone": "Drone-3", "reason": "..."}
+      ],
+      "rationale_summary": "..."
+    },
+    "timestamp": "2026-06-21T03:14:00Z"
+  }
+
+  If fleet_state.json doesn't exist yet, the dashboard shows a friendly
+  "waiting for data" state instead of erroring.
+*/
+
+const POLL_INTERVAL_MS = 2000;
+const DATA_URL = "fleet_state.json";
+
+function batteryColor(pct) {
+  if (pct < 20) return "var(--red)";
+  if (pct < 50) return "var(--yellow)";
+  return "var(--green)";
+}
+
+function statusPillClass(pct, canAcceptMore) {
+  if (pct < 20) return "crit";
+  if (!canAcceptMore) return "warn";
+  return "ok";
+}
+
+function statusLabel(pct, canAcceptMore) {
+  if (pct < 20) return "CRITICAL";
+  if (!canAcceptMore) return "AT CAPACITY";
+  return "NOMINAL";
+}
+
+function renderFleet(data) {
+  const grid = document.getElementById("fleetGrid");
+  const banner = document.getElementById("planBanner");
+  const lastUpdated = document.getElementById("lastUpdated");
+
+  grid.innerHTML = "";
+
+  (data.drones || []).forEach(d => {
+    const isCritical = d.battery_pct < 20;
+    const card = document.createElement("div");
+    card.className = "card" + (isCritical ? " critical" : "");
+
+    const remaining = (d.remaining_tasks && d.remaining_tasks.length)
+      ? d.remaining_tasks.join(", ")
+      : "none";
+
+    card.innerHTML = `
+      <div class="card-header">
+        <div class="drone-name">${d.drone_id}</div>
+        <div class="status-pill ${statusPillClass(d.battery_pct, d.can_accept_more)}">
+          ${statusLabel(d.battery_pct, d.can_accept_more)}
+        </div>
+      </div>
+      <div class="battery-row">
+        <div class="battery-bar-bg">
+          <div class="battery-bar-fill" style="width:${d.battery_pct}%; background:${batteryColor(d.battery_pct)};"></div>
+        </div>
+        <div class="battery-pct">${d.battery_pct}%</div>
+      </div>
+      <div class="field"><b>Position:</b> ${d.position || "—"}</div>
+      <div class="field"><b>Current task:</b> ${d.current_task || "idle"}</div>
+      <div class="field"><b>Remaining:</b> ${remaining}</div>
+    `;
+    grid.appendChild(card);
+  });
+
+  if (data.last_plan && data.last_plan.reassignments && data.last_plan.reassignments.length) {
+    const lines = data.last_plan.reassignments.map(
+      r => `<b>${r.task}</b>: ${r.from_drone} → ${r.to_drone} <span style="color:var(--muted)">(${r.reason})</span>`
+    ).join("<br>");
+    banner.innerHTML = `🔄 <b>Latest reassignment plan</b><br>${lines}`;
+    banner.classList.add("show");
+  } else {
+    banner.classList.remove("show");
+  }
+
+  const ts = data.timestamp ? new Date(data.timestamp).toLocaleTimeString() : "unknown";
+  lastUpdated.textContent = `Last updated: ${ts}`;
+}
+
+function showWaitingState() {
+  document.getElementById("fleetGrid").innerHTML =
+    `<div class="field">No fleet data yet — start the coordinator and drones, then have something write fleet_state.json.</div>`;
+  document.getElementById("lastUpdated").textContent = "Waiting for fleet_state.json…";
+}
+
+async function pollData() {
+  try {
+    const res = await fetch(DATA_URL + "?t=" + Date.now()); // cache-bust
+    if (!res.ok) throw new Error("not found");
+    const data = await res.json();
+    renderFleet(data);
+  } catch (e) {
+    showWaitingState();
+  }
+}
+
+pollData();
+setInterval(pollData, POLL_INTERVAL_MS);
+</script>
+
+</body>
+</html>

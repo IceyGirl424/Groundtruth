@@ -5,6 +5,7 @@ This is the entry point agent that ASI:One will route messages to.
 """
 
 import asyncio
+import json
 from datetime import datetime
 from uuid import uuid4
 
@@ -106,6 +107,31 @@ def build_fleet_summary(statuses: list[StatusResponse]) -> str:
     return "\n".join(lines)
 
 
+def write_dashboard_state(fleet_status: list[dict], plan, logger=None) -> None:
+    """Write the dashboard feed file (polled by dashboard.html every 2s).
+
+    Called twice per disruption: once with plan=None right after the fleet
+    status is collected (so the cards — including any red CRITICAL card — render
+    immediately), then again with the plan once Claude returns (so the
+    reassignment banner appears). Nice-to-have: any file error is swallowed so it
+    never crashes the agent.
+    """
+    try:
+        with open("fleet_state.json", "w") as f:
+            json.dump(
+                {
+                    "drones": fleet_status,
+                    "last_plan": plan,
+                    "timestamp": datetime.utcnow().isoformat(),
+                },
+                f,
+                indent=2,
+            )
+    except Exception:
+        if logger is not None:
+            logger.exception("Writing fleet_state.json failed (dashboard feed)")
+
+
 @chat_proto.on_message(ChatMessage)
 async def handle_message(ctx: Context, sender: str, msg: ChatMessage):
     ctx.logger.info(f"Received message from {sender}")
@@ -168,6 +194,10 @@ async def handle_message(ctx: Context, sender: str, msg: ChatMessage):
             ]
 
             if fleet_status:
+                # Push fleet state to the dashboard now (no plan yet) so the drone
+                # cards — including a red CRITICAL card — render immediately.
+                write_dashboard_state(fleet_status, None, ctx.logger)
+
                 # ---- Step 2a: recall similar past incidents from vector memory ----
                 # All memory calls run off the event loop and are guarded so a
                 # Redis/embedding hiccup never crashes the agent. We only feed a
@@ -241,6 +271,10 @@ async def handle_message(ctx: Context, sender: str, msg: ChatMessage):
                         f"({type(exc).__name__}: {exc})."
                     )
                 await ctx.send(sender, create_text_chat(plan_text))
+
+                # Update the dashboard feed with the plan so the reassignment
+                # banner appears (cards were already written above).
+                write_dashboard_state(fleet_status, plan, ctx.logger)
 
                 # ---- Step 2c: LLM-as-judge scores the plan (traced in Arize) ----
                 if plan is not None:
