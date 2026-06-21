@@ -1,0 +1,15 @@
+# Core agent framework (Fetch.ai)
+uagents
+uagents-core
+
+# Claude reasoning + LLM-as-judge
+anthropic
+
+# Agent memory: Redis vector search
+redis
+redisvl
+sentence-transformers
+
+# Observability: Arize AX tracing for LLM calls
+arize-otel
+openinference-instrumentation-anthropic

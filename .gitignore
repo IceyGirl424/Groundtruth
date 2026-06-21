@@ -1,0 +1,14 @@
+# Secrets — never commit
+.env
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Runtime logs
+logs/
+
+# uAgents local runtime state (per-agent storage; machine-local)
+*.agent
+*_data.json
